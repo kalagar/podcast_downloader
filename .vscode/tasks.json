@@ -1,0 +1,24 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Build and Run PodLoad-Mac",
+      "type": "shell",
+      "command": "xcodebuild",
+      "args": [
+        "-project",
+        "PodcastDownloader.xcodeproj",
+        "-scheme",
+        "PodcastDownloader",
+        "-destination",
+        "platform=macOS",
+        "-configuration",
+        "Debug",
+        "build"
+      ],
+      "group": "build",
+      "isBackground": false,
+      "problemMatcher": ["$xcodebuild"]
+    }
+  ]
+}
