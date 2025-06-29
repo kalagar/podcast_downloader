@@ -45,21 +45,21 @@ enum AppError: LocalizedError, Identifiable {
         switch self {
         case .networkUnavailable:
             return "No internet connection available"
-        case .invalidURL(let url):
+        case .invalidURL(_):
             return "Invalid URL: \\(url)"
-        case .downloadFailed(let reason):
+        case .downloadFailed(_):
             return "Download failed: \\(reason)"
-        case .fileSystemError(let reason):
+        case .fileSystemError(_):
             return "File system error: \\(reason)"
-        case .parsingError(let reason):
+        case .parsingError(_):
             return "Parsing error: \\(reason)"
-        case .unsupportedProvider(let provider):
+        case .unsupportedProvider(_):
             return "Unsupported provider: \\(provider)"
         case .quotaExceeded:
             return "API quota exceeded. Please try again later."
         case .authenticationRequired:
             return "Authentication required for this provider"
-        case .metadataExtractionFailed(let reason):
+        case .metadataExtractionFailed(_):
             return "Metadata extraction failed: \\(reason)"
         }
     }

@@ -203,7 +203,7 @@ class MetadataExtractor: ObservableObject {
         
         let httpResponse = response as? HTTPURLResponse
         let contentType = httpResponse?.value(forHTTPHeaderField: "Content-Type") ?? ""
-        let contentLength = httpResponse?.value(forHTTPHeaderField: "Content-Length")
+        _ = httpResponse?.value(forHTTPHeaderField: "Content-Length")
             .flatMap { Int64($0) } ?? 0
         
         // Extract filename from URL

@@ -29,6 +29,13 @@ class NetworkMonitor: ObservableObject {
             }
         }
         monitor.start(queue: queue)
+        
+        // Get initial network status
+        let currentPath = monitor.currentPath
+        isConnected = currentPath.status == .satisfied
+        if let interface = currentPath.availableInterfaces.first {
+            connectionType = interface.type
+        }
     }
     
     deinit {

@@ -13,6 +13,6 @@
 	<key>com.apple.security.get-task-allow</key>
 	<true/>
 	<key>com.apple.security.temporary-exception.sbpl</key>
-	<string>(allow process-exec* (literal "/opt/homebrew/bin/yt-dlp"))</string>
+	<string>(allow process-exec* (literal "/opt/homebrew/bin/yt-dlp")) (allow process-exec* (literal "/usr/local/bin/yt-dlp")) (allow process-exec* (literal "/usr/bin/yt-dlp")) (allow process-exec* (literal "/usr/bin/which")) (allow process-exec* (literal "/usr/bin/env"))</string>
 </dict>
 </plist>

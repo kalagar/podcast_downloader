@@ -66,7 +66,7 @@ class DownloadService: ObservableObject {
             currentDownloadTitle = metadata.title
             
             // Check if item already exists
-            if let existingItem = try findExistingItem(sourceURL: metadata.originalURL) {
+            if (try findExistingItem(sourceURL: metadata.originalURL)) != nil {
                 throw DownloadError.downloadFailed("Media from this URL already exists in your library")
             }
             

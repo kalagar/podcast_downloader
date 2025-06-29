@@ -64,6 +64,11 @@ class LibraryViewModel: ObservableObject {
             .sink { [weak self] isConnected in
                 if !isConnected {
                     self?.currentError = .networkUnavailable
+                } else {
+                    // Clear network error when connection is restored
+                    if case .networkUnavailable = self?.currentError {
+                        self?.currentError = nil
+                    }
                 }
             }
             .store(in: &cancellables)
