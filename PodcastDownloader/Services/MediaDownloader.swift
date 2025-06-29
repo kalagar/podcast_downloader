@@ -83,225 +83,365 @@ class MediaDownloader: ObservableObject {
         outputDir: URL,
         itemId: UUID
     ) async throws -> URL {
-        print("=== Starting yt-dlp download process ===")
-        print("URL: \(url)")
-        print("Output directory: \(outputDir.path)")
+        NSLog("=== Starting yt-dlp download process ===")
+        NSLog("URL: %@", url)
+        NSLog("Output directory: %@", outputDir.path)
         
-        // Try to find yt-dlp in common locations
-        let possiblePaths = [
-            "/opt/homebrew/bin/yt-dlp",
-            "/usr/local/bin/yt-dlp",
-            "/usr/bin/yt-dlp"
-        ]
-        
-        print("Checking for yt-dlp in common locations...")
-        var ytDlpPath: String?
-        for path in possiblePaths {
-            print("Checking path: \(path)")
-            let fileExists = FileManager.default.fileExists(atPath: path)
-            print("  - File exists: \(fileExists)")
-            
-            if fileExists {
-                let isExecutable = FileManager.default.isExecutableFile(atPath: path)
-                print("  - Is executable: \(isExecutable)")
-                
-                if isExecutable {
-                    // Try to actually access the file to verify sandbox permissions
-                    do {
-                        let attributes = try FileManager.default.attributesOfItem(atPath: path)
-                        print("  - File attributes: \(attributes)")
-                        print("Found yt-dlp at: \(path)")
-                        ytDlpPath = path
-                        break
-                    } catch {
-                        print("  - Error accessing file: \(error)")
-                    }
-                }
-            }
-        }
-        
-        // If not found in common locations, try to find it using 'which'
-        if ytDlpPath == nil {
-            print("yt-dlp not found in common locations, trying 'which' command...")
-            do {
-                ytDlpPath = try await findYtDlpPath()
-                if let path = ytDlpPath {
-                    print("Found yt-dlp via 'which': \(path)")
-                }
-            } catch {
-                print("Error running 'which' command: \(error)")
-            }
-        }
-        
-        // Also try to use /usr/bin/env as a fallback
-        if ytDlpPath == nil {
-            print("Trying /usr/bin/env approach...")
-            ytDlpPath = "/usr/bin/env"
-        }
-        
-        guard let finalYtDlpPath = ytDlpPath else {
-            let errorMessage = """
-            yt-dlp not found. Please ensure it's installed and accessible.
-            
-            To install yt-dlp:
-            1. Using Homebrew: brew install yt-dlp
-            2. Using pip: pip install yt-dlp
-            
-            Searched locations:
-            \(possiblePaths.joined(separator: "\n"))
-            
-            This app requires yt-dlp to download YouTube videos. Please install it and restart the app.
-            """
-            print("ERROR: \(errorMessage)")
-            throw AppError.downloadFailed(errorMessage)
-        }
+        // Find working yt-dlp path
+        let ytDlpPath = try await findWorkingYtDlpPath()
+        NSLog("Using yt-dlp path: %@", ytDlpPath)
         
         // Create a safe filename template
         let filenameTemplate = sanitizeFilename(metadata.title)
         let outputTemplate = outputDir.appendingPathComponent("\(filenameTemplate).%(ext)s").path
         
-        print("Using yt-dlp path: \(finalYtDlpPath)")
-        print("Output template: \(outputTemplate)")
-        print("Downloading from URL: \(url)")
+        NSLog("Output template: %@", outputTemplate)
+        NSLog("Downloading from URL: %@", url)
         
-        // Build yt-dlp command - adjust based on the path type
-        var arguments: [String]
-        if finalYtDlpPath == "/usr/bin/env" {
-            // Use env to find yt-dlp in PATH
-            arguments = [
-                "yt-dlp",
-                "--extract-flat", "false",
-                "--write-info-json",
-                "--output", outputTemplate,
-                "--format", "best[height<=1080]/best", // Prefer up to 1080p
-                "--no-playlist", // Download single video only
-                "--embed-metadata",
-                "--add-metadata",
-                url
-            ]
-        } else {
-            arguments = [
-                "--extract-flat", "false",
-                "--write-info-json",
-                "--output", outputTemplate,
-                "--format", "best[height<=1080]/best", // Prefer up to 1080p
-                "--no-playlist", // Download single video only
-                "--embed-metadata",
-                "--add-metadata",
-                url
-            ]
-        }
+        // Execute yt-dlp download
+        return try await executeYtDlpDownload(
+            ytDlpPath: ytDlpPath,
+            url: url,
+            outputTemplate: outputTemplate,
+            outputDir: outputDir,
+            filenameTemplate: filenameTemplate,
+            itemId: itemId
+        )
+    }
+    
+    private func findWorkingYtDlpPath() async throws -> String {
+        NSLog("Searching for working yt-dlp binary...")
         
-        print("yt-dlp command: \(finalYtDlpPath) \(arguments.joined(separator: " "))")
+        // Strategy 1: Check common installation paths
+        let commonPaths = [
+            "/opt/homebrew/bin/yt-dlp",
+            "/usr/local/bin/yt-dlp",
+            "/usr/bin/yt-dlp"
+        ]
         
-        // Execute yt-dlp
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: finalYtDlpPath)
-        process.arguments = arguments
-        
-        // Set environment PATH to include common directories
-        var environment = ProcessInfo.processInfo.environment
-        let pathAdditions = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
-        if let existingPath = environment["PATH"] {
-            environment["PATH"] = "\(pathAdditions):\(existingPath)"
-        } else {
-            environment["PATH"] = pathAdditions
-        }
-        process.environment = environment
-        
-        print("Process environment PATH: \(environment["PATH"] ?? "not set")")
-        
-        let outputPipe = Pipe()
-        let errorPipe = Pipe()
-        process.standardOutput = outputPipe
-        process.standardError = errorPipe
-        
-        // Update progress periodically (yt-dlp doesn't easily provide real-time progress)
-        let progressTask = Task {
-            for progress in stride(from: 0.0, through: 0.9, by: 0.1) {
-                try await Task.sleep(nanoseconds: 1_000_000_000) // 1 second
-                try Task.checkCancellation()
-                
-                await MainActor.run {
-                    downloadProgress[itemId] = progress
-                }
+        for path in commonPaths {
+            NSLog("Testing path: %@", path)
+            if await testYtDlpPath(path) {
+                NSLog("Found working yt-dlp at: %@", path)
+                return path
             }
         }
         
-        defer {
-            progressTask.cancel()
+        // Strategy 2: Use `which` command to find yt-dlp
+        NSLog("Trying 'which' command...")
+        if let whichPath = try? await findYtDlpWithWhich() {
+            NSLog("Found yt-dlp via which: %@", whichPath)
+            if await testYtDlpPath(whichPath) {
+                return whichPath
+            }
         }
         
+        // Strategy 3: Try copying yt-dlp to a temporary location
+        NSLog("Trying to copy yt-dlp to temporary location...")
+        if let tempPath = try? await copyYtDlpToTemp() {
+            NSLog("Copied yt-dlp to: %@", tempPath)
+            if await testYtDlpPath(tempPath) {
+                return tempPath
+            }
+        }
+        
+        // Strategy 4: Last resort - use env with full PATH
+        NSLog("Using /usr/bin/env as last resort...")
+        if await testEnvYtDlp() {
+            return "/usr/bin/env"
+        }
+        
+        // If all else fails, throw an error
+        let errorMessage = """
+        yt-dlp not found or not accessible. 
+        
+        This appears to be a sandboxing issue. The app cannot execute yt-dlp.
+        
+        To install yt-dlp:
+        1. Using Homebrew: brew install yt-dlp
+        2. Using pip: pip install yt-dlp
+        
+        Searched locations:
+        \(commonPaths.joined(separator: "\n"))
+        
+        Note: macOS sandbox restrictions may prevent external tool execution.
+        Consider running the app without sandbox restrictions for development.
+        """
+        NSLog("ERROR: %@", errorMessage)
+        throw AppError.downloadFailed(errorMessage)
+    }
+    
+    /// Test if a yt-dlp path works by running --version
+    private func testYtDlpPath(_ path: String) async -> Bool {
         do {
-            print("Attempting to run yt-dlp process...")
-            try process.run()
-            print("Process started successfully, waiting for completion...")
-            process.waitUntilExit()
-            print("Process completed with exit status: \(process.terminationStatus)")
+            let result = try await executeSimpleCommand(
+                executablePath: path,
+                arguments: ["--version"]
+            )
+            NSLog("Path %@ test result: exit=%d", path, result.exitCode)
+            print("Path test result for \(path): exit=\(result.exitCode), output: \(result.output.prefix(100))")
+            return result.exitCode == 0
         } catch {
-            print("Failed to run yt-dlp process: \(error)")
-            throw AppError.downloadFailed("Failed to start yt-dlp: \(error.localizedDescription)")
+            NSLog("Path %@ test failed: %@", path, error.localizedDescription)
+            return false
+        }
+    }
+    
+    /// Test if /usr/bin/env can find yt-dlp
+    private func testEnvYtDlp() async -> Bool {
+        do {
+            let result = try await executeSimpleCommand(
+                executablePath: "/usr/bin/env",
+                arguments: ["yt-dlp", "--version"]
+            )
+            NSLog("/usr/bin/env yt-dlp test result: exit=%d", result.exitCode)
+            return result.exitCode == 0
+        } catch {
+            NSLog("/usr/bin/env yt-dlp test failed: %@", error.localizedDescription)
+            return false
+        }
+    }
+    
+    /// Execute a simple command and return the result
+    private func executeSimpleCommand(
+        executablePath: String,
+        arguments: [String]
+    ) async throws -> (exitCode: Int32, output: String) {
+        return try await withCheckedThrowingContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let task = Process()
+                task.executableURL = URL(fileURLWithPath: executablePath)
+                task.arguments = arguments
+                
+                // Set environment with extended PATH
+                var environment = ProcessInfo.processInfo.environment
+                let pathAdditions = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+                if let existingPath = environment["PATH"] {
+                    environment["PATH"] = "\(pathAdditions):\(existingPath)"
+                } else {
+                    environment["PATH"] = pathAdditions
+                }
+                task.environment = environment
+                
+                // Set up pipes
+                let outputPipe = Pipe()
+                let errorPipe = Pipe()
+                task.standardOutput = outputPipe
+                task.standardError = errorPipe
+                
+                do {
+                    try task.run()
+                    task.waitUntilExit()
+                    
+                    let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
+                    let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
+                    let output = String(data: outputData + errorData, encoding: .utf8) ?? ""
+                    
+                    continuation.resume(returning: (task.terminationStatus, output))
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+    }
+    
+    /// Find yt-dlp using the which command
+    private func findYtDlpWithWhich() async throws -> String? {
+        let result = try await executeSimpleCommand(
+            executablePath: "/usr/bin/which",
+            arguments: ["yt-dlp"]
+        )
+        
+        if result.exitCode == 0 {
+            let path = result.output.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !path.isEmpty && FileManager.default.fileExists(atPath: path) {
+                return path
+            }
         }
         
-        // Check if process succeeded
-        guard process.terminationStatus == 0 else {
-            let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
-            let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
-            
-            let errorString = String(data: errorData, encoding: .utf8) ?? "No error output"
-            let outputString = String(data: outputData, encoding: .utf8) ?? "No output"
-            
-            print("yt-dlp failed with status: \(process.terminationStatus)")
-            print("Error output: \(errorString)")
-            print("Standard output: \(outputString)")
-            
-            throw AppError.downloadFailed("yt-dlp failed (exit code \(process.terminationStatus)): \(errorString)")
+        return nil
+    }
+    
+    /// Copy yt-dlp to a temporary location that might be accessible
+    private func copyYtDlpToTemp() async throws -> String {
+        let tempDir = FileManager.default.temporaryDirectory
+        let tempYtDlp = tempDir.appendingPathComponent("yt-dlp-temp")
+        
+        // Find source yt-dlp
+        let sourcePaths = [
+            "/opt/homebrew/bin/yt-dlp",
+            "/usr/local/bin/yt-dlp",
+            "/usr/bin/yt-dlp"
+        ]
+        
+        for sourcePath in sourcePaths {
+            if FileManager.default.fileExists(atPath: sourcePath) {
+                try FileManager.default.copyItem(atPath: sourcePath, toPath: tempYtDlp.path)
+                
+                // Make it executable
+                try FileManager.default.setAttributes(
+                    [.posixPermissions: 0o755],
+                    ofItemAtPath: tempYtDlp.path
+                )
+                
+                return tempYtDlp.path
+            }
         }
         
-        // Get any output from the process
-        let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
-        let outputString = String(data: outputData, encoding: .utf8) ?? "No output"
-        print("yt-dlp output: \(outputString)")
+        throw AppError.downloadFailed("Could not find yt-dlp to copy")
+    }
         
-        // Find the downloaded file
-        print("Looking for downloaded files in: \(outputDir.path)")
-        let downloadedFiles = try fileManager.contentsOfDirectory(at: outputDir, includingPropertiesForKeys: nil)
+    /// Execute the yt-dlp download process
+    private func executeYtDlpDownload(
+        ytDlpPath: String,
+        url: String,
+        outputTemplate: String,
+        outputDir: URL,
+        filenameTemplate: String,
+        itemId: UUID
+    ) async throws -> URL {
+        return try await withCheckedThrowingContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                // Progress simulation task
+                let progressTask = Task {
+                    for progress in stride(from: 0.0, through: 0.9, by: 0.1) {
+                        try await Task.sleep(nanoseconds: 1_000_000_000) // 1 second
+                        try Task.checkCancellation()
+                        
+                        await MainActor.run {
+                            self.downloadProgress[itemId] = progress
+                        }
+                    }
+                }
+                
+                let task = Process()
+                
+                // Build arguments based on executable path
+                var arguments: [String]
+                if ytDlpPath == "/usr/bin/env" {
+                    task.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+                    arguments = [
+                        "yt-dlp",
+                        "--write-info-json",
+                        "--output", outputTemplate,
+                        "--format", "best[height<=1080]/best",
+                        "--no-playlist",
+                        "--embed-metadata",
+                        "--add-metadata",
+                        url
+                    ]
+                } else {
+                    task.executableURL = URL(fileURLWithPath: ytDlpPath)
+                    arguments = [
+                        "--write-info-json",
+                        "--output", outputTemplate,
+                        "--format", "best[height<=1080]/best",
+                        "--no-playlist",
+                        "--embed-metadata",
+                        "--add-metadata",
+                        url
+                    ]
+                }
+                
+                task.arguments = arguments
+                
+                // Set environment with extended PATH
+                var environment = ProcessInfo.processInfo.environment
+                let pathAdditions = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+                if let existingPath = environment["PATH"] {
+                    environment["PATH"] = "\(pathAdditions):\(existingPath)"
+                } else {
+                    environment["PATH"] = pathAdditions
+                }
+                task.environment = environment
+                
+                let outputPipe = Pipe()
+                let errorPipe = Pipe()
+                task.standardOutput = outputPipe
+                task.standardError = errorPipe
+                
+                NSLog("Executing yt-dlp with command: %@ %@", ytDlpPath, arguments.joined(separator: " "))
+                
+                do {
+                    try task.run()
+                    task.waitUntilExit()
+                    
+                    progressTask.cancel()
+                    
+                    let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
+                    let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
+                    
+                    let outputString = String(data: outputData, encoding: .utf8) ?? "No output"
+                    let errorString = String(data: errorData, encoding: .utf8) ?? "No error output"
+                    
+                    NSLog("yt-dlp process completed with exit code: %d", task.terminationStatus)
+                    
+                    if task.terminationStatus == 0 {
+                        // Find the downloaded file
+                        Task { @MainActor in
+                            do {
+                                let downloadedFile = try self.findDownloadedFile(
+                                    in: outputDir,
+                                    with: filenameTemplate
+                                )
+                                
+                                self.downloadProgress[itemId] = 1.0
+                                continuation.resume(returning: downloadedFile)
+                            } catch {
+                                continuation.resume(throwing: error)
+                            }
+                        }
+                    } else {
+                        NSLog("yt-dlp output: %@", outputString)
+                        NSLog("yt-dlp error: %@", errorString)
+                        let errorMessage = "yt-dlp failed (exit code \(task.terminationStatus)): \(errorString)"
+                        continuation.resume(throwing: AppError.downloadFailed(errorMessage))
+                    }
+                } catch {
+                    progressTask.cancel()
+                    NSLog("Failed to execute yt-dlp: %@", error.localizedDescription)
+                    continuation.resume(throwing: AppError.downloadFailed("Failed to start yt-dlp: \(error.localizedDescription)"))
+                }
+            }
+        }
+    }
+    
+    /// Find the downloaded file in the output directory
+    private func findDownloadedFile(in outputDir: URL, with filenameTemplate: String) throws -> URL {
+        NSLog("Looking for downloaded files in: %@", outputDir.path)
+        
+        let downloadedFiles = try FileManager.default.contentsOfDirectory(at: outputDir, includingPropertiesForKeys: nil)
             .filter { file in
                 let filename = file.lastPathComponent
                 let matches = filename.hasPrefix(filenameTemplate) && 
                        (filename.hasSuffix(".mp4") || filename.hasSuffix(".mkv") || 
                         filename.hasSuffix(".webm") || filename.hasSuffix(".m4a"))
-                print("Checking file: \(filename) - matches criteria: \(matches)")
+                NSLog("Checking file: %@ - matches criteria: %@", filename, matches ? "YES" : "NO")
                 return matches
             }
             .sorted { $0.path < $1.path }
         
-        print("Found \(downloadedFiles.count) matching files")
+        NSLog("Found %d matching files", downloadedFiles.count)
         for file in downloadedFiles {
-            print("  - \(file.lastPathComponent)")
+            NSLog("  - %@", file.lastPathComponent)
         }
         
         guard let downloadedFile = downloadedFiles.first else {
-            print("No downloaded file found matching criteria")
+            NSLog("No downloaded file found matching criteria")
             // List all files in the directory for debugging
             do {
-                let allFiles = try fileManager.contentsOfDirectory(at: outputDir, includingPropertiesForKeys: nil)
-                print("All files in output directory:")
+                let allFiles = try FileManager.default.contentsOfDirectory(at: outputDir, includingPropertiesForKeys: nil)
+                NSLog("All files in output directory:")
                 for file in allFiles {
-                    print("  - \(file.lastPathComponent)")
+                    NSLog("  - %@", file.lastPathComponent)
                 }
             } catch {
-                print("Error listing directory contents: \(error)")
+                NSLog("Error listing directory contents: %@", error.localizedDescription)
             }
             throw AppError.downloadFailed("Downloaded file not found")
         }
         
-        print("Successfully downloaded: \(downloadedFile.lastPathComponent)")
-        
-        await MainActor.run {
-            downloadProgress[itemId] = 1.0
-        }
-        
+        NSLog("Successfully downloaded: %@", downloadedFile.lastPathComponent)
         return downloadedFile
     }
     
@@ -386,52 +526,6 @@ class MediaDownloader: ObservableObject {
         return filename.components(separatedBy: invalidChars).joined(separator: "_")
     }
     
-    private func findYtDlpPath() async throws -> String? {
-        return try await withCheckedThrowingContinuation { continuation in
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/usr/bin/which")
-            process.arguments = ["yt-dlp"]
-            
-            let pipe = Pipe()
-            let errorPipe = Pipe()
-            process.standardOutput = pipe
-            process.standardError = errorPipe
-            
-            // Set environment PATH to include common directories
-            var environment = ProcessInfo.processInfo.environment
-            let pathAdditions = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
-            if let existingPath = environment["PATH"] {
-                environment["PATH"] = "\(pathAdditions):\(existingPath)"
-            } else {
-                environment["PATH"] = pathAdditions
-            }
-            process.environment = environment
-            
-            process.terminationHandler = { process in
-                let data = pipe.fileHandleForReading.readDataToEndOfFile()
-                let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
-                
-                if process.terminationStatus == 0,
-                   let output = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
-                   !output.isEmpty {
-                    print("'which' found yt-dlp at: \(output)")
-                    continuation.resume(returning: output)
-                } else {
-                    let errorString = String(data: errorData, encoding: .utf8) ?? "Unknown error"
-                    print("'which' command failed: \(errorString)")
-                    continuation.resume(returning: nil)
-                }
-            }
-            
-            do {
-                try process.run()
-            } catch {
-                print("Failed to run 'which' command: \(error)")
-                continuation.resume(throwing: error)
-            }
-        }
-    }
-    
     private func fileExtension(for contentType: String, url: String) -> String {
         switch contentType.lowercased() {
         case let type where type.contains("video/mp4"):
@@ -456,20 +550,7 @@ class MediaDownloader: ObservableObject {
 
 extension URLSession {
     func download(from url: URL, progress: @escaping (Int64, Int64, Int64) -> Void) async throws -> (URL, URLResponse) {
-        return try await withCheckedThrowingContinuation { continuation in
-            let task = downloadTask(with: url) { localURL, response, error in
-                if let error = error {
-                    continuation.resume(throwing: error)
-                } else if let localURL = localURL, let response = response {
-                    continuation.resume(returning: (localURL, response))
-                } else {
-                    continuation.resume(throwing: AppError.downloadFailed("Unknown download error"))
-                }
-            }
-            
-            // Note: Progress tracking would need a custom delegate implementation
-            // For now, we'll update progress periodically
-            task.resume()
-        }
+        let (localURL, response) = try await download(from: url)
+        return (localURL, response)
     }
 }
